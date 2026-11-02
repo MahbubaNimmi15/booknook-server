@@ -182,10 +182,7 @@ app.post("/api/books", verifyInternalApi, async (req, res) => {
       description: description.trim(),
       quantity: bookQuantity,
       rating: bookRating,
-
-      // Owner email comes from authenticated Next.js API
       addedBy: addedBy.trim().toLowerCase(),
-
       createdAt: new Date(),
     };
 
@@ -295,6 +292,7 @@ app.post("/api/borrow", verifyInternalApi, async (req, res) => {
 });
 
 // POST Return Book (Protected)
+// FIXED: Handles both string and ObjectId book IDs.
 app.post("/api/return", verifyInternalApi, async (req, res) => {
   const { borrowId, userEmail } = req.body || {};
 
@@ -339,11 +337,35 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
     }
 
     try {
-      await db.collection("books").updateOne(
-        { _id: borrow.bookId },
-        { $inc: { quantity: 1 } }
-      );
+      // Convert string bookId to MongoDB ObjectId
+      const bookId =
+        typeof borrow.bookId === "string" &&
+        ObjectId.isValid(borrow.bookId)
+          ? new ObjectId(borrow.bookId)
+          : borrow.bookId;
+
+      if (!(bookId instanceof ObjectId)) {
+        throw new Error(
+          "Borrow record has an invalid book ID"
+        );
+      }
+
+      // Increase quantity by 1
+      const updateResult = await db
+        .collection("books")
+        .updateOne(
+          { _id: bookId },
+          { $inc: { quantity: 1 } }
+        );
+
+      // Check whether the book was found
+      if (updateResult.matchedCount !== 1) {
+        throw new Error(
+          "Book not found while restoring quantity"
+        );
+      }
     } catch (error) {
+      // Restore borrow status if quantity update fails
       await db.collection("borrows").updateOne(
         {
           _id: borrow._id,
@@ -372,11 +394,11 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
   }
 });
 
-
- // PATCH - Edit Book
+// PATCH - Edit Book
 app.patch("/api/books/:id", verifyInternalApi, async (req, res) => {
   try {
     const { id } = req.params;
+
     const {
       userEmail,
       title,
@@ -404,7 +426,8 @@ app.patch("/api/books/:id", verifyInternalApi, async (req, res) => {
 
     if (
       [title, author, category, image, description].some(
-        (value) => typeof value !== "string" || !value.trim()
+        (value) =>
+          typeof value !== "string" || !value.trim()
       )
     ) {
       return res.status(400).json({
@@ -518,8 +541,6 @@ app.delete("/api/books/:id", verifyInternalApi, async (req, res) => {
     });
   }
 });
-
-
 
 // MongoDB Connection and Server
 async function startServer() {
