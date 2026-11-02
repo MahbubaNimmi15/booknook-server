@@ -34,3 +34,17 @@ Never commit the .env file or database credentials.
 - POST /api/return — Return a book
 
 Protected endpoints require the x-internal-api-key header.
+
+## Deployment
+
+The backend can be deployed on Vercel.
+
+Required environment variables:
+- MONGODB_URI
+- DB_NAME
+- INTERNAL_API_SECRET
+
+Configure these variables in the hosting dashboard.
+Never expose database credentials or API secrets.
+
+After deployment, test the API health endpoint.
