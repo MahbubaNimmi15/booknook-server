@@ -18,6 +18,7 @@ app.use(
       "http://localhost:3001",
       "http://localhost:3002",
       "https://booknook-client-zbaq.vercel.app",
+      "https://booknook-client-pied.vercel.app",
     ],
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "x-internal-api-key"],
@@ -25,8 +26,14 @@ app.use(
 );
 
 app.use(express.json());
-// MongoDB connection for local and Vercel
-let dbPromise;
+
+// ==========================================
+// MONGODB CONNECTION
+// Works locally and on Vercel
+// ==========================================
+
+let dbPromise = null;
+let mongoClient = null;
 
 async function connectDB() {
   if (!dbPromise) {
@@ -35,16 +42,27 @@ async function connectDB() {
         throw new Error("MONGODB_URI is missing");
       }
 
-      const client = new MongoClient(process.env.MONGODB_URI);
-      await client.connect();
+      mongoClient = new MongoClient(process.env.MONGODB_URI);
 
-      const db = client.db(process.env.DB_NAME || "booknook");
+      await mongoClient.connect();
+
+      const db = mongoClient.db(
+        process.env.DB_NAME || "booknook"
+      );
+
       await db.command({ ping: 1 });
 
       console.log("MongoDB Connected Successfully!");
+
       return db;
-    })().catch((error) => {
+    })().catch(async (error) => {
       dbPromise = null;
+
+      if (mongoClient) {
+        await mongoClient.close().catch(() => {});
+        mongoClient = null;
+      }
+
       throw error;
     });
   }
@@ -52,30 +70,33 @@ async function connectDB() {
   return dbPromise;
 }
 
-// Connect before handling API requests
+// Database middleware for all API routes
 app.use("/api", async (req, res, next) => {
   try {
-    app.locals.db = await connectDB();
+    req.db = await connectDB();
     next();
   } catch (error) {
-    console.error("Database Connection Failed:", error.message);
-    res.status(500).json({
+    console.error(
+      "Database Connection Failed:",
+      error.message
+    );
+
+    return res.status(503).json({
       success: false,
       message: "Database connection failed",
     });
   }
 });
+
 // ==========================================
 // VERIFY INTERNAL API
 // ==========================================
 
 function verifyInternalApi(req, res, next) {
   const apiKey = req.headers["x-internal-api-key"];
+  const secret = process.env.INTERNAL_API_SECRET;
 
-  if (
-    !process.env.INTERNAL_API_SECRET ||
-    apiKey !== process.env.INTERNAL_API_SECRET
-  ) {
+  if (!secret || !apiKey || apiKey !== secret) {
     return res.status(403).json({
       success: false,
       message: "Unauthorized request",
@@ -101,6 +122,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     message: "BookNook API is working",
+    database: "connected",
   });
 });
 
@@ -110,9 +132,7 @@ app.get("/api/health", (req, res) => {
 
 app.get("/api/books", async (req, res) => {
   try {
-    const db = app.locals.db;
-
-    const books = await db
+    const books = await req.db
       .collection("books")
       .find({})
       .sort({ _id: -1 })
@@ -133,13 +153,12 @@ app.get("/api/books", async (req, res) => {
 });
 
 // ==========================================
-// GET SINGLE BOOK DETAILS
+// GET SINGLE BOOK
 // ==========================================
 
 app.get("/api/books/:id", async (req, res) => {
   try {
-    const db = app.locals.db;
-    const id = req.params.id;
+    const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -148,7 +167,7 @@ app.get("/api/books/:id", async (req, res) => {
       });
     }
 
-    const book = await db.collection("books").findOne({
+    const book = await req.db.collection("books").findOne({
       _id: new ObjectId(id),
     });
 
@@ -179,8 +198,6 @@ app.get("/api/books/:id", async (req, res) => {
 
 app.post("/api/books", verifyInternalApi, async (req, res) => {
   try {
-    const db = app.locals.db;
-
     const {
       title,
       author,
@@ -192,11 +209,18 @@ app.post("/api/books", verifyInternalApi, async (req, res) => {
       addedBy,
     } = req.body || {};
 
+    const requiredFields = [
+      title,
+      author,
+      category,
+      image,
+      description,
+    ];
+
     if (
-      [title, author, category, image, description].some(
+      requiredFields.some(
         (value) =>
-          typeof value !== "string" ||
-          !value.trim()
+          typeof value !== "string" || !value.trim()
       )
     ) {
       return res.status(400).json({
@@ -246,7 +270,7 @@ app.post("/api/books", verifyInternalApi, async (req, res) => {
       createdAt: new Date(),
     };
 
-    const result = await db
+    const result = await req.db
       .collection("books")
       .insertOne(newBook);
 
@@ -270,7 +294,6 @@ app.post("/api/books", verifyInternalApi, async (req, res) => {
 // ==========================================
 
 app.post("/api/borrow", verifyInternalApi, async (req, res) => {
-  const db = app.locals.db;
   const { bookId, userEmail } = req.body || {};
 
   if (
@@ -286,6 +309,7 @@ app.post("/api/borrow", verifyInternalApi, async (req, res) => {
   }
 
   try {
+    const db = req.db;
     const bookObjectId = new ObjectId(bookId);
     const normalizedEmail = userEmail.trim().toLowerCase();
 
@@ -354,7 +378,7 @@ app.post("/api/borrow", verifyInternalApi, async (req, res) => {
 });
 
 // ==========================================
-// RETURN BOOK - UPDATED
+// RETURN BOOK
 // ==========================================
 
 app.post("/api/return", verifyInternalApi, async (req, res) => {
@@ -372,12 +396,11 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
     });
   }
 
-  const db = app.locals.db;
+  const db = req.db;
   const normalizedEmail = userEmail.trim().toLowerCase();
   const borrowObjectId = new ObjectId(borrowId);
 
   try {
-    // Find active borrow record
     const borrow = await db.collection("borrows").findOne({
       _id: borrowObjectId,
       userEmail: normalizedEmail,
@@ -391,7 +414,6 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
       });
     }
 
-    // Support ObjectId and string book IDs
     let bookObjectId;
 
     if (borrow.bookId instanceof ObjectId) {
@@ -408,20 +430,21 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
       });
     }
 
-    // Mark borrow as returned only once
-    const returnResult = await db.collection("borrows").updateOne(
-      {
-        _id: borrowObjectId,
-        userEmail: normalizedEmail,
-        status: "borrowed",
-      },
-      {
-        $set: {
-          status: "returned",
-          returnedAt: new Date(),
+    const returnResult = await db
+      .collection("borrows")
+      .updateOne(
+        {
+          _id: borrowObjectId,
+          userEmail: normalizedEmail,
+          status: "borrowed",
         },
-      }
-    );
+        {
+          $set: {
+            status: "returned",
+            returnedAt: new Date(),
+          },
+        }
+      );
 
     if (returnResult.modifiedCount !== 1) {
       return res.status(409).json({
@@ -430,36 +453,26 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
       });
     }
 
-    // Restore book quantity
     try {
-      const bookResult = await db.collection("books").updateOne(
-        {
-          _id: bookObjectId,
-        },
-        {
-          $inc: {
-            quantity: 1,
-          },
-        }
-      );
+      const bookResult = await db
+        .collection("books")
+        .updateOne(
+          { _id: bookObjectId },
+          { $inc: { quantity: 1 } }
+        );
 
       if (bookResult.matchedCount !== 1) {
         throw new Error("Book not found in database");
       }
     } catch (updateError) {
-      // Roll back borrow status if quantity update fails
       await db.collection("borrows").updateOne(
         {
           _id: borrowObjectId,
           status: "returned",
         },
         {
-          $set: {
-            status: "borrowed",
-          },
-          $unset: {
-            returnedAt: "",
-          },
+          $set: { status: "borrowed" },
+          $unset: { returnedAt: "" },
         }
       );
 
@@ -470,14 +483,12 @@ app.post("/api/return", verifyInternalApi, async (req, res) => {
       success: true,
       message: "Book returned successfully",
     });
-
   } catch (error) {
     console.error("Return Book Error:", error);
 
     return res.status(500).json({
       success: false,
       message: "Failed to return book",
-      error: error.message,
     });
   }
 });
@@ -508,7 +519,10 @@ app.patch("/api/books/:id", verifyInternalApi, async (req, res) => {
       });
     }
 
-    if (!userEmail || typeof userEmail !== "string") {
+    if (
+      typeof userEmail !== "string" ||
+      !userEmail.trim()
+    ) {
       return res.status(400).json({
         success: false,
         message: "User email is required",
@@ -543,26 +557,26 @@ app.patch("/api/books/:id", verifyInternalApi, async (req, res) => {
       });
     }
 
-    const db = app.locals.db;
-
-    const result = await db.collection("books").updateOne(
-      {
-        _id: new ObjectId(id),
-        addedBy: userEmail.trim().toLowerCase(),
-      },
-      {
-        $set: {
-          title: title.trim(),
-          author: author.trim(),
-          category: category.trim(),
-          image: image.trim(),
-          description: description.trim(),
-          quantity: bookQuantity,
-          rating: bookRating,
-          updatedAt: new Date(),
+    const result = await req.db
+      .collection("books")
+      .updateOne(
+        {
+          _id: new ObjectId(id),
+          addedBy: userEmail.trim().toLowerCase(),
         },
-      }
-    );
+        {
+          $set: {
+            title: title.trim(),
+            author: author.trim(),
+            category: category.trim(),
+            image: image.trim(),
+            description: description.trim(),
+            quantity: bookQuantity,
+            rating: bookRating,
+            updatedAt: new Date(),
+          },
+        }
+      );
 
     if (result.matchedCount === 0) {
       return res.status(404).json({
@@ -601,19 +615,22 @@ app.delete("/api/books/:id", verifyInternalApi, async (req, res) => {
       });
     }
 
-    if (!userEmail || typeof userEmail !== "string") {
+    if (
+      typeof userEmail !== "string" ||
+      !userEmail.trim()
+    ) {
       return res.status(400).json({
         success: false,
         message: "User email is required",
       });
     }
 
-    const db = app.locals.db;
-
-    const result = await db.collection("books").deleteOne({
-      _id: new ObjectId(id),
-      addedBy: userEmail.trim().toLowerCase(),
-    });
+    const result = await req.db
+      .collection("books")
+      .deleteOne({
+        _id: new ObjectId(id),
+        addedBy: userEmail.trim().toLowerCase(),
+      });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({
@@ -637,30 +654,12 @@ app.delete("/api/books/:id", verifyInternalApi, async (req, res) => {
 });
 
 // ==========================================
-// MONGODB CONNECTION AND SERVER
+// LOCAL SERVER STARTUP
 // ==========================================
 
 async function startServer() {
-  let client;
-
   try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error("MONGODB_URI is missing in .env");
-    }
-
-    client = new MongoClient(process.env.MONGODB_URI);
-
-    await client.connect();
-
-    const db = client.db(
-      process.env.DB_NAME || "booknook"
-    );
-
-    await db.command({ ping: 1 });
-
-    console.log("MongoDB Connected Successfully!");
-
-    app.locals.db = db;
+    await connectDB();
 
     app.listen(PORT, () => {
       console.log(
@@ -668,20 +667,12 @@ async function startServer() {
       );
     });
   } catch (error) {
-    console.error(
-      "MongoDB Connection Failed:",
-      error.message
-    );
-
-    if (client) {
-      await client.close().catch(() => {});
-    }
-
+    console.error("Server startup failed:", error.message);
     process.exit(1);
   }
 }
 
-// Start server only when running locally
+// Start locally, not inside Vercel
 if (!process.env.VERCEL) {
   startServer();
 }
