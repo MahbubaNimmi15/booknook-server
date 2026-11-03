@@ -25,7 +25,46 @@ app.use(
 );
 
 app.use(express.json());
+// MongoDB connection for local and Vercel
+let dbPromise;
 
+async function connectDB() {
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      if (!process.env.MONGODB_URI) {
+        throw new Error("MONGODB_URI is missing");
+      }
+
+      const client = new MongoClient(process.env.MONGODB_URI);
+      await client.connect();
+
+      const db = client.db(process.env.DB_NAME || "booknook");
+      await db.command({ ping: 1 });
+
+      console.log("MongoDB Connected Successfully!");
+      return db;
+    })().catch((error) => {
+      dbPromise = null;
+      throw error;
+    });
+  }
+
+  return dbPromise;
+}
+
+// Connect before handling API requests
+app.use("/api", async (req, res, next) => {
+  try {
+    app.locals.db = await connectDB();
+    next();
+  } catch (error) {
+    console.error("Database Connection Failed:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed",
+    });
+  }
+});
 // ==========================================
 // VERIFY INTERNAL API
 // ==========================================
@@ -642,4 +681,10 @@ async function startServer() {
   }
 }
 
-startServer();
+// Start server only when running locally
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+// Export Express app for Vercel
+module.exports = app;
