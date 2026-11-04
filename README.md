@@ -1,50 +1,44 @@
-# BookNook Backend
+# BookNook â€” Backend API
 
-Express.js and MongoDB API for the BookNook online library.
+This repository contains the backend API for BookNook, a full-stack online library application.
 
-## Technologies
+## Live Links
+
+- **Client:** https://booknook-client-zbaq.vercel.app
+- **Server:** https://booknook-server-gold.vercel.app
+
+## GitHub Repositories
+
+- **Client:** https://github.com/MahbubaNimmi15/booknook-client
+- **Server:** https://github.com/MahbubaNimmi15/booknook-server
+
+## Backend Features
+
+1. MongoDB database integration.
+2. REST API for book management.
+3. Create and retrieve book records.
+4. Support book borrowing operations.
+5. Support book return operations.
+6. Manage library data through Express.js.
+
+## Technologies Used
+
 - Node.js
 - Express.js
 - MongoDB
-- CORS
-- dotenv
-
-## Local Development
-
-1. Install dependencies using npm install.
-2. Create a .env file in the project root.
-3. Configure MONGODB_URI, DB_NAME, and INTERNAL_API_SECRET.
-4. Start the server using npm start.
-
-Never commit the .env file or database credentials.
+- Vercel
 
 ## API Endpoints
 
-### Public
-- GET / — Server status
-- GET /api/health — Health check
-- GET /api/books — Get all books
-- GET /api/books/:id — Get book details
+The application includes book management and borrowing-related API routes.
 
-### Protected
-- POST /api/books — Add a book
-- PATCH /api/books/:id — Update a book
-- DELETE /api/books/:id — Delete a book
-- POST /api/borrow — Borrow a book
-- POST /api/return — Return a book
+## Local Setup
 
-Protected endpoints require the x-internal-api-key header.
+1. Clone the server repository.
+2. Run npm install.
+3. Configure the required environment variables.
+4. Start the backend using the command defined in package.json.
 
 ## Deployment
 
-The backend can be deployed on Vercel.
-
-Required environment variables:
-- MONGODB_URI
-- DB_NAME
-- INTERNAL_API_SECRET
-
-Configure these variables in the hosting dashboard.
-Never expose database credentials or API secrets.
-
-After deployment, test the API health endpoint.
+The backend is deployed on Vercel and serves the BookNook frontend.
